@@ -2,11 +2,44 @@
 
 Find the answer to a question in a scanned PDF and highlight it, using only yes/no questions about images.
 
-Query: **"What did Blue Bird Ltd. deliver?"** on a 200-page image-only PDF, with `--answers 0`. The answer is on pages 64 and 142.
+![demo](media/multi.gif)
 
-![demo](media/demo.gif)
+## Examples
 
-Full video: [media/demo.mp4](media/demo.mp4)
+All on the same 200-page image-only PDF, with Jev.
+
+### One answer
+
+```sh
+uv run pdfjev.py "How much did the bearings cost?"
+```
+
+Page 142, error 8 px, 11.1 s, 85 decisions, $0.025. [Video](media/single.mp4) · [GIF](media/single.gif)
+
+![one answer](media/single-142.png)
+
+### More answers
+
+```sh
+uv run pdfjev.py "What did Blue Bird Ltd. deliver?" --answers 0
+```
+
+Pages 64 and 142, error 19 px and 26 px, 17.2 s, 158 decisions, $0.032. [Video](media/multi.mp4) · [GIF](media/multi.gif) (the GIF at the top)
+
+![page 64](media/multi-64.png)
+![page 142](media/multi-142.png)
+
+### Moves scaled by probability
+
+```sh
+uv run pdfjev.py "Where is the basement key hidden?" --mover prob
+```
+
+Page 37, error 22 px, 16.1 s, 72 decisions, $0.023. [Video](media/prob.mp4) · [GIF](media/prob.gif)
+
+![prob mover](media/prob-37.png)
+
+## How it works
 
 The PDF has no text layer. Every page is just an image. A decision model never writes text and never returns coordinates; it only answers yes or no. All the work is done by halving:
 
@@ -91,7 +124,7 @@ Prices: Jev $0.042 / 1M input tokens, OpenAI Decisions `gpt-6-luna` $0.10 / 1M i
 
 ## Results on the demo
 
-Highlight error against the real position of the sentence:
+Highlight error against the real position of the sentence, from one benchmark run. Separate runs differ by up to ~20 px, because the model is unsure right at an edge (page 142 in the "more answers" example above came out at 26 px).
 
 | Query | Pages | `bisect` | `prob` |
 |---|---|---|---|

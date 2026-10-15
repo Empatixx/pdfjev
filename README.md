@@ -14,7 +14,7 @@ All on the same 200-page image-only PDF, with Jev.
 uv run pdfjev.py "How much did the bearings cost?"
 ```
 
-Page 142, error 8 px, 11.1 s, 85 decisions, $0.025. [Video](media/single.mp4) · [GIF](media/single.gif)
+Page 142, error 8 px, 9.9 s, 71 requests, $0.013. [Video](media/single.mp4) · [GIF](media/single.gif)
 
 ![one answer](media/single-142.png)
 
@@ -24,7 +24,7 @@ Page 142, error 8 px, 11.1 s, 85 decisions, $0.025. [Video](media/single.mp4) ·
 uv run pdfjev.py "What did Blue Bird Ltd. deliver?" --answers 0
 ```
 
-Pages 64 and 142, error 19 px and 26 px, 17.2 s, 158 decisions, $0.032. [Video](media/multi.mp4) · [GIF](media/multi.gif) (the GIF at the top)
+Pages 64 and 142, error 8 px and 8 px, 13.7 s, 133 requests, $0.017. [Video](media/multi.mp4) · [GIF](media/multi.gif) (the GIF at the top)
 
 ![page 64](media/multi-64.png)
 ![page 142](media/multi-142.png)
@@ -35,7 +35,7 @@ Pages 64 and 142, error 19 px and 26 px, 17.2 s, 158 decisions, $0.032. [Video](
 uv run pdfjev.py "Where is the basement key hidden?" --mover prob
 ```
 
-Page 37, error 22 px, 16.1 s, 72 decisions, $0.023. [Video](media/prob.mp4) · [GIF](media/prob.gif)
+Page 37, error 14 px, 13.0 s, 58 requests, $0.012. [Video](media/prob.mp4) · [GIF](media/prob.gif)
 
 ![prob mover](media/prob-37.png)
 
@@ -43,13 +43,13 @@ Page 37, error 22 px, 16.1 s, 72 decisions, $0.023. [Video](media/prob.mp4) · [
 
 The PDF has no text layer. Every page is just an image. A decision model never writes text and never returns coordinates; it only answers yes or no. All the work is done by halving:
 
-1. **Find the page.** Split the pages into 8 chunks and ask about all of them at once: *"Does any of these pages answer the query?"* Keep the chunks that say yes, repeat until single pages are left.
+1. **Find the page.** Put two pages side by side into one image, 100 images in 4 parallel requests, with one question per page: *"Does page 142 contain the answer?"* The pages on images that say yes are sent once more one by one, because the model sometimes mixes up the left and the right page.
 2. **Split the page.** Cut the page image into 4 overlapping crops at once: *"Does this crop contain the whole answer?"* Keep the crops that say yes, repeat until a thin strip is left.
 3. **Highlight.** The model places 4 points, like on a canvas:
    - a red line moves up and down until it sits just above and just below the answer,
    - then everything except a part of the answer line is blanked out and the model is asked *"Is any letter visible?"* to find the left and right edge.
 
-   Top and bottom run in parallel, then left and right. Each edge sends 3 probes at once and moves to the boundary that fits the answers best.
+   Top and bottom run in parallel, then left and right. Each edge sends 3 probes at once and moves to the boundary that fits the answers best. Every probe is asked twice, once inverted (*"Does the line touch the text or lie below it?"*), and the two answers are averaged.
 
    The 4 corners become the highlight, and the model is done.
 
@@ -109,34 +109,40 @@ A new backend only needs one method, `probability(state, question, images) -> fl
 
 200 pages, one answer, Jev, MacBook:
 
-| Phase | Time | Decisions | Tokens | USD |
+| Phase | Time | Requests | Tokens | USD |
 |---|---|---|---|---|
 | render pages | 1.4 s | 0 | 0 | 0 |
-| find page | 5.7–8 s | 19 | 448k | 0.019 |
-| split + highlight | 3–5 s | 62 | 124k | 0.005 |
-| **total** | **~11–14 s** | 81 | 572k | **0.024** |
+| find page | 3.3–4 s | 5 | 208k | 0.009 |
+| split + highlight | 4–5 s | 66 | 92k | 0.004 |
+| **total** | **~9–10 s** | 71 | 300k | **0.013** |
 
 Prices: Jev $0.042 / 1M input tokens, OpenAI Decisions `gpt-6-luna` $0.10 / 1M input tokens, output is free for both.
 
-- Most of the cost is the page search: every page has to be shown at least once, and Jev counts about 2,000 tokens per page image no matter its resolution.
-- Parallel requests with many images are throughput bound: 4 × 25 pages take about as long as 100 pages in a row would.
-- OpenAI counts about 760 tokens per page, so the same run costs about the same ($0.022) at a higher price per token.
+What the tokens are spent on:
+
+- Every image costs about 2,000 tokens, no matter its resolution. Two pages fit into one image and still read fine, four do not.
+- A question costs only about 25 tokens, so one request asks about every page in it at once instead of doing more rounds.
+- An image is inserted wherever its name appears, also inside question text. Image names are replaced with random ids before sending, so an image is never counted twice.
+- Most of the cost is the page search, because every page has to be shown once.
 
 ## Results on the demo
 
-Highlight error against the real position of the sentence, from one benchmark run. Separate runs differ by up to ~20 px, because the model is unsure right at an edge (page 142 in the "more answers" example above came out at 26 px).
+Highlight error against the real position of the sentence:
 
 | Query | Pages | `bisect` | `prob` |
 |---|---|---|---|
-| How much did the bearings cost? | 142 | 8 px | 8 px |
-| Where is the basement key hidden? | 37 | 27 px | 28 px |
-| When does the new branch director start? | 188 | 10 px | 16 px |
-| What did Blue Bird Ltd. deliver? (`--answers 0`) | 64, 142 | 19, 8 px | 17, 10 px |
+| How much did the bearings cost? | 142 | 8 px | 7 px |
+| Where is the basement key hidden? | 37 | 10 px | 14 px |
+| When does the new branch director start? | 188 | 10 px | 9 px |
+| What did Blue Bird Ltd. deliver? (`--answers 0`) | 64, 142 | 8, 8 px | 8, 7 px |
 
 With OpenAI Decisions the page and the strip are found just as well, but the red line question is answered poorly, so the highlight is off by about 200 px.
+
+The demo is easier than a real scan: the hidden sentence is the only meaningful one among random words, and the pages are clean.
 
 ## Notes
 
 - Jev accepts images only with `jev-preview`, needs the short image side of at least ~280 px and an aspect ratio up to ~3:1. Images are padded to fit.
 - At most 50 page images go into one request.
+- Image names in `state` are swapped for random ids by `deciders.py`, so never reuse an image name inside question text by hand.
 - Fonts are loaded from the macOS system font folder; change the paths at the top of `pdfjev.py` and `make_demo_pdf.py` on other systems.

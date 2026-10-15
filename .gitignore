@@ -1,0 +1,6 @@
+.env
+.venv/
+__pycache__/
+out/
+demo.pdf
+demo_truth.json

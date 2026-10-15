@@ -1,0 +1,6 @@
+[project]
+name = "pdfjev"
+version = "0.1.0"
+description = "Find and highlight answers in image-only PDFs with yes/no decision models (TypeSafe Jev or OpenAI Decisions), by halving."
+requires-python = ">=3.11"
+dependencies = ["httpx", "openai>=3.31", "pillow", "pymupdf"]

@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from pathlib import Path
 
 import pymupdf
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from deciders import TypeSafeJev as Decider
 
@@ -27,6 +27,7 @@ PROBES = 3
 PRECISION = 3
 FRAME = (1280, 960)
 FONT = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 24)
+TITLE = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial Bold.ttf", 40)
 SMALL = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 16)
 CALLS = ThreadPoolExecutor(64)
 EDGES = ThreadPoolExecutor(4)
@@ -100,6 +101,22 @@ class Recorder:
         stage = "highlight" if caption.startswith(("3.", "Answer")) else "search"
         with self.lock:
             self.frames += [(frame, stage)] * hold
+
+    def title(self, background, query, subtitle, hold=4):
+        frame = Image.new("RGB", FRAME, "white")
+        view = background.copy()
+        view.thumbnail((FRAME[0] - 40, FRAME[1] - 90))
+        frame.paste(view, ((FRAME[0] - view.width) // 2, 70))
+        frame = Image.blend(frame.filter(ImageFilter.GaussianBlur(5)), Image.new("RGB", FRAME, "white"), 0.35)
+        d = ImageDraw.Draw(frame)
+        width = max(d.textlength(query, font=TITLE), d.textlength(subtitle, font=FONT)) + 120
+        x0, y0 = (FRAME[0] - width) // 2, FRAME[1] // 2 - 110
+        d.rounded_rectangle([x0, y0, x0 + width, y0 + 220], radius=24, fill="white", outline=(210, 210, 210), width=2)
+        d.text((x0 + 60, y0 + 40), "QUERY", fill=(130, 130, 130), font=FONT)
+        d.text((x0 + 60, y0 + 85), query, fill="black", font=TITLE)
+        d.text((x0 + 60, y0 + 150), subtitle, fill=(110, 110, 110), font=FONT)
+        with self.lock:
+            self.frames += [(frame, "search")] * hold
 
     def gif(self, frames, path):
         small = [f.resize((640, 480)) for f in frames]
@@ -364,13 +381,12 @@ def highlight_page(pdf, n, query, decider, rec, mover, step):
 
 def find_and_highlight(pdf, query, decider, out="out", answers=1, mover="bisect", step=80):
     rec, watch = Recorder(), Stopwatch(decider)
-    title = Image.new("RGB", (1200, 300), "white")
-    ImageDraw.Draw(title).text((40, 120), f"Query: {query}", fill="black", font=FONT)
-    rec.add(title, f"{Path(pdf).name}, image-only pages", hold=3)
     pages = render_pages(pdf)
     watch.lap("render pages")
     print(f"1. Find the page in {len(pages)} pages")
-    found = PageSearch(decider, pages, query, rec).find(answers)
+    search = PageSearch(decider, pages, query, rec)
+    rec.title(search.overview({}), query, f"{len(pages)} image-only pages, no text layer")
+    found = search.find(answers)
     watch.lap("find page")
     print(f"   -> pages {[n + 1 for n in found]}")
     out = Path(out)

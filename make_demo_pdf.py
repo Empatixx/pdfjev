@@ -6,6 +6,7 @@ import pymupdf
 PAGES = 200
 ZOOM = 2
 HIDDEN = {
+    64: "Blue Bird Ltd. also delivered 950 steel shafts to the Denver warehouse on May 3, 2026.",
     37: "The key to the basement at 12 Elm Street is hidden under the third flower pot left of the door.",
     142: "Blue Bird Ltd. delivered 4,812 ball bearings for a total price of 1,203,000 dollars.",
     188: "The general meeting decided that the new Boston branch director starts on March 1, 2027.",

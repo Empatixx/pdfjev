@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+import threading
 import time
 
 import httpx
@@ -26,31 +27,44 @@ def fit(img):
 
 
 def jpeg_base64(img):
+    if isinstance(img, str):
+        return img
     buf = io.BytesIO()
     fit(img).save(buf, "JPEG", quality=85)
     return base64.b64encode(buf.getvalue()).decode()
 
 
 class Decider:
+    usd_per_million_input = 0.0
+
     def __init__(self):
         self.calls = 0
+        self.input_tokens = 0
+        self.lock = threading.Lock()
 
     def yes(self, state, question, images):
-        self.calls += 1
-        p = self.probability(state, question, images)
+        p, tokens = self.probability(state, question, images)
+        with self.lock:
+            self.calls += 1
+            self.input_tokens += tokens
         return p >= 0.5, p
+
+    @property
+    def usd(self):
+        return self.input_tokens * self.usd_per_million_input / 1_000_000
 
     def probability(self, state, question, images):
         raise NotImplementedError
 
 
 class TypeSafeJev(Decider):
+    usd_per_million_input = 0.042
     endpoint = "https://api.typesafe.ai/v1/systemone"
 
     def __init__(self, model="jev-preview", api_key=None):
         super().__init__()
         self.model = model
-        self.http = httpx.Client(timeout=300, headers={
+        self.http = httpx.Client(timeout=300, limits=httpx.Limits(max_connections=64), headers={
             "Authorization": f"Bearer {api_key or os.environ['TYPESAFE_API_KEY']}",
             "TypeSafe-Danger-Zone-Images": "true",
             "TypeSafe-Danger-Zone-Long-Context": "true",
@@ -69,10 +83,13 @@ class TypeSafeJev(Decider):
                 break
             time.sleep(2 ** attempt)
         r.raise_for_status()
-        return r.json()["answers"]["q"]["noul"]
+        data = r.json()
+        return data["answers"]["q"]["noul"], data.get("usage", {}).get("input_tokens", 0)
 
 
 class OpenAIDecisions(Decider):
+    usd_per_million_input = 0.10
+
     def __init__(self, model="gpt-6-luna", api_key=None):
         super().__init__()
         from openai import OpenAI
@@ -90,4 +107,4 @@ class OpenAIDecisions(Decider):
             input=[{"role": "user", "content": content}],
             questions=[{"type": "predicate", "name": "q", "instructions": question}],
         )
-        return decision.answers[0].probability
+        return decision.answers[0].probability, decision.usage.input_tokens

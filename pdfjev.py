@@ -97,15 +97,22 @@ class Recorder:
         view.thumbnail((FRAME[0] - 40, FRAME[1] - 90))
         frame.paste(view, ((FRAME[0] - view.width) // 2, 70))
         ImageDraw.Draw(frame).text((20, 20), caption, fill="black", font=FONT)
+        stage = "highlight" if caption.startswith(("3.", "Answer")) else "search"
         with self.lock:
-            self.frames += [frame] * hold
+            self.frames += [(frame, stage)] * hold
+
+    def gif(self, frames, path):
+        small = [f.resize((640, 480)) for f in frames]
+        small[0].save(path, save_all=True, append_images=small[1:], duration=700, loop=0)
 
     def save(self, out_dir):
-        gif = [f.resize((640, 480)) for f in self.frames]
-        gif[0].save(out_dir / "demo.gif", save_all=True, append_images=gif[1:], duration=700, loop=0)
+        frames = [f for f, _ in self.frames]
+        self.gif(frames, out_dir / "demo.gif")
+        self.gif([f for f, s in self.frames if s == "search"], out_dir / "search.gif")
+        self.gif([f for f, s in self.frames if s == "highlight"], out_dir / "highlight.gif")
         if shutil.which("ffmpeg"):
             with tempfile.TemporaryDirectory() as tmp:
-                for i, f in enumerate(self.frames):
+                for i, f in enumerate(frames):
                     f.save(f"{tmp}/{i:04d}.png")
                 subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "1.4", "-i", f"{tmp}/%04d.png",
                                 "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", str(out_dir / "demo.mp4")], check=True)

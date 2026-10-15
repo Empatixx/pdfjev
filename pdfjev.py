@@ -123,33 +123,51 @@ class PageSearch:
         for i, t in enumerate(self.thumbs):
             x, y = i % cols * 62, i // cols * 87
             grid.paste(t, (x, y))
-            for (lo, hi), found in verdicts:
-                if lo <= i < hi:
-                    d.rectangle([x, y, x + 59, y + 84], outline="green" if found else "red", width=4)
+            if i in verdicts:
+                d.rectangle([x, y, x + 59, y + 84], outline="green" if verdicts[i] else "red", width=4)
         return grid
 
-    def ask(self, chunk):
-        lo, hi = chunk
-        images = {f"page-{i + 1}": self.pages[i] for i in range(lo, hi)}
-        found, p = self.decider.yes({"query": self.query, "pages": list(images)},
-                                    "Does any of the page images in state.pages contain the answer to state.query?", images)
-        print(f"  pages {lo + 1:3}-{hi:3}: {'YES' if found else 'NO'} (p={p:.2f})")
-        return found, p
+    def image(self, group):
+        if len(group) == 1:
+            return self.pages[group[0]]
+        a, b = (decode(self.pages[i]) for i in group)
+        sheet = Image.new("RGB", (a.width + b.width + 20, a.height), "white")
+        sheet.paste(a, (0, 0))
+        sheet.paste(b, (a.width + 20, 0))
+        return sheet
+
+    def ask(self, groups):
+        images = {f"image-{k}": self.image(g) for k, g in enumerate(groups)}
+        state = {"query": self.query, "images": []}
+        for k, g in enumerate(groups):
+            labels = {"page": g[0] + 1} if len(g) == 1 else {"left page": g[0] + 1, "right page": g[1] + 1}
+            state["images"].append({"image": f"image-{k}", **labels})
+        questions = {str(i): f"Does page {i + 1} in state.images contain the answer to state.query?" for g in groups for i in g}
+        return {int(i): p for i, p in self.decider.many(state, questions, images).items()}
+
+    def stage(self, groups, per_call):
+        batches = [groups[k:k + per_call] for k in range(0, len(groups), per_call)]
+        scores = {}
+        for part in CALLS.map(self.ask, batches):
+            scores.update(part)
+        return scores
 
     def find(self, limit=1):
-        ranges = [(0, len(self.pages))]
-        while any(hi - lo > 1 for lo, hi in ranges):
-            chunks = []
-            for lo, hi in ranges:
-                parts = max(PAGE_SPLIT, (hi - lo + PAGES_PER_CALL - 1) // PAGES_PER_CALL)
-                chunks += split(lo, hi, min(parts, hi - lo))
-            answers = list(CALLS.map(self.ask, chunks))
-            verdicts = [(c, a[0]) for c, a in zip(chunks, answers)]
-            hits = sorted(((a[1], c) for c, a in zip(chunks, answers) if a[0]), reverse=True)
-            self.rec.add(self.overview(verdicts), f"1. Find the page  |  {len(chunks)} chunks at once, "
-                         f"{len(hits)} with the answer")
-            ranges = [c for _, c in (hits[:limit] if limit else hits)]
-        return sorted(lo for lo, _ in ranges)
+        n = len(self.pages)
+        sheets = [list(range(k, min(n, k + 2))) for k in range(0, n, 2)]
+        first = self.stage(sheets, PAGES_PER_CALL // 2)
+        candidates = sorted(i for g in sheets if max(first[j] for j in g) >= 0.5 for i in g)
+        print(f"  {len(sheets)} two-page images: candidates {[i + 1 for i in candidates]}")
+        self.rec.add(self.overview({i: i in candidates for i in range(n)}),
+                     f"1. Find the page  |  {len(sheets)} two-page images at once, {len(candidates)} candidates")
+        if not candidates:
+            return []
+        second = self.stage([[i] for i in candidates], PAGES_PER_CALL)
+        hits = sorted((i for i in candidates if second[i] >= 0.5), key=lambda i: -second[i])
+        print("  single pages: " + ", ".join(f"{i + 1} p={second[i]:.2f}" for i in candidates))
+        self.rec.add(self.overview({i: i in hits for i in candidates}),
+                     f"1. Find the page  |  {len(candidates)} candidates one by one: {[i + 1 for i in hits]}")
+        return sorted(hits[:limit] if limit else hits)
 
 
 def find_strip(decider, page, query, rec):
@@ -226,16 +244,23 @@ class Highlighter:
 
     def probability(self, edge, pos):
         if edge in ("top", "bottom"):
-            question = (f"Is the red horizontal line in state.image {'above' if edge == 'top' else 'below'} the text "
-                        "that answers state.query, without touching any of its letters?")
-            _, p = self.decider.yes(self.state({"y": pos}, "canvas"), question, {"canvas": self.view(edge, pos)})
+            side, other = ("above", "below") if edge == "top" else ("below", "above")
+            questions = {
+                "yes": f"Is the red horizontal line in state.image {side} the text that answers state.query, without touching any of its letters?",
+                "no": f"Does the red horizontal line in state.image touch the text that answers state.query or lie {other} it?",
+            }
+            ps = self.decider.many(self.state({"y": pos}, "canvas"), questions, {"canvas": self.view(edge, pos)})
         else:
             masked = Image.new("RGB", self.canvas.size, "white")
             box = self.crop_box(edge, pos)
             masked.paste(self.canvas.crop(box), box[:2])
-            _, p = self.decider.yes(self.state({"x": pos}, "masked"),
-                                    "Is any letter or part of a letter visible in state.image?", {"masked": masked})
-        print(f"  {edge} edge at {pos}: p={p:.2f}")
+            questions = {
+                "yes": "Is any letter or part of a letter visible in state.image?",
+                "no": "Is state.image completely blank, with no letters at all?",
+            }
+            ps = self.decider.many(self.state({"x": pos}, "masked"), questions, {"masked": masked})
+        p = (ps["yes"] + 1 - ps["no"]) / 2
+        print(f"  {edge} edge at {pos}: p={p:.2f} (yes {ps['yes']:.2f}, no {ps['no']:.2f})")
         return p
 
     def bisect_edge(self, edge, limit):

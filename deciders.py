@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+import uuid
 
 import httpx
 from PIL import Image
@@ -34,6 +35,21 @@ def jpeg_base64(img):
     return base64.b64encode(buf.getvalue()).decode()
 
 
+def swap_placeholders(state, images):
+    ids = {name: uuid.uuid4().hex for name in images}
+
+    def walk(v):
+        if isinstance(v, str):
+            return ids.get(v, v)
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        return v
+
+    return walk(state), {ids[name]: img for name, img in images.items()}
+
+
 class Decider:
     usd_per_million_input = 0.0
 
@@ -43,17 +59,22 @@ class Decider:
         self.lock = threading.Lock()
 
     def yes(self, state, question, images):
-        p, tokens = self.probability(state, question, images)
+        p = self.many(state, {"q": question}, images)["q"]
+        return p >= 0.5, p
+
+    def many(self, state, questions, images):
+        state, images = swap_placeholders(state, images)
+        answers, tokens = self.probabilities(state, questions, images)
         with self.lock:
             self.calls += 1
             self.input_tokens += tokens
-        return p >= 0.5, p
+        return answers
 
     @property
     def usd(self):
         return self.input_tokens * self.usd_per_million_input / 1_000_000
 
-    def probability(self, state, question, images):
+    def probabilities(self, state, questions, images):
         raise NotImplementedError
 
 
@@ -70,11 +91,11 @@ class TypeSafeJev(Decider):
             "TypeSafe-Danger-Zone-Long-Context": "true",
         })
 
-    def probability(self, state, question, images):
+    def probabilities(self, state, questions, images):
         body = {
             "model": self.model,
             "state": state,
-            "questions": {"q": {"type": "noul", "instructions": question}},
+            "questions": {name: {"type": "noul", "instructions": q} for name, q in questions.items()},
             "assets": {name: {"type": "image", "format": "jpeg", "data_base64": jpeg_base64(img)} for name, img in images.items()},
         }
         for attempt in range(5):
@@ -84,7 +105,7 @@ class TypeSafeJev(Decider):
             time.sleep(2 ** attempt)
         r.raise_for_status()
         data = r.json()
-        return data["answers"]["q"]["noul"], data.get("usage", {}).get("input_tokens", 0)
+        return {name: a["noul"] for name, a in data["answers"].items()}, data.get("usage", {}).get("input_tokens", 0)
 
 
 class OpenAIDecisions(Decider):
@@ -97,7 +118,7 @@ class OpenAIDecisions(Decider):
         self.model = model
         self.client = OpenAI(api_key=api_key)
 
-    def probability(self, state, question, images):
+    def probabilities(self, state, questions, images):
         content = [{"type": "input_text", "text": "state = " + json.dumps(state, ensure_ascii=False)}]
         for name, img in images.items():
             content.append({"type": "input_text", "text": f"image {name}:"})
@@ -105,6 +126,6 @@ class OpenAIDecisions(Decider):
         decision = self.client.decisions.create(
             model=self.model,
             input=[{"role": "user", "content": content}],
-            questions=[{"type": "predicate", "name": "q", "instructions": question}],
+            questions=[{"type": "predicate", "name": name, "instructions": q} for name, q in questions.items()],
         )
-        return decision.answers[0].probability, decision.usage.input_tokens
+        return {a.name: a.probability for a in decision.answers}, decision.usage.input_tokens

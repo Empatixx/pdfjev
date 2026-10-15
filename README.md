@@ -2,6 +2,8 @@
 
 Find the answer to a question in a scanned PDF and highlight it, using only yes/no questions about images.
 
+Query: **"How much did the bearings cost?"** on a 200-page image-only PDF. The answer is on page 142.
+
 ![demo](media/demo.gif)
 
 Full video: [media/demo.mp4](media/demo.mp4)

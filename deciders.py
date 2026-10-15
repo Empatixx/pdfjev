@@ -96,8 +96,9 @@ class TypeSafeJev(Decider):
             "model": self.model,
             "state": state,
             "questions": {name: {"type": "noul", "instructions": q} for name, q in questions.items()},
-            "assets": {name: {"type": "image", "format": "jpeg", "data_base64": jpeg_base64(img)} for name, img in images.items()},
         }
+        if images:
+            body["assets"] = {name: {"type": "image", "format": "jpeg", "data_base64": jpeg_base64(img)} for name, img in images.items()}
         for attempt in range(5):
             r = self.http.post(self.endpoint, json=body)
             if r.status_code < 500 and r.status_code != 429:
